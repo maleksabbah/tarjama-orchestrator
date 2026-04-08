@@ -149,13 +149,14 @@ async def start_subtitling(job_id: str):
         input_path=results_dir,
     )
 
-    await rc.push_subtitle_task(
+   await rc.push_subtitle_task(
         task_id=task["id"],
         job_id=job_id,
         results_dir=results_dir,
         original_video=job["input_file_path"],
         subtitle_format=job.get("subtitle_format", "srt"),
         burn=job.get("burn_subtitles", False),
+        user_id=job["user_id"],
     )
 
     print(f"  [STATE] Pushed subtitle task for job {job_id}")
