@@ -1,32 +1,12 @@
-"""
-Orchestrator Redis Client
-Queue operations + progress tracking.
-"""
 import json
-import redis.asyncio as redis
 from app.Config import config
+import redis.asyncio as redis
+
+client = redis.from_url(config.REDIS_URL, decode_responses=True)
 
 
-client: redis.Redis = None
-
-
-async def init_redis():
-    global client
-    client = redis.from_url(config.REDIS_URL,decode_responses=True)
-
-
-async def close_redis():
-    global client
-    if client:
-        await client.close()
-
-# =============================================================================
-# Queue operations
-# =============================================================================
-
-async def push_task(queue_name: str, message: dict):
-    """Push a task message to a queue."""
-    await client.lpush(queue_name, json.dumps(message))
+async def push_task(queue: str, message: dict):
+    await client.lpush(queue, json.dumps(message))
 
 
 async def pop_completed(timeout: int = 5) -> dict | None:
@@ -36,12 +16,26 @@ async def pop_completed(timeout: int = 5) -> dict | None:
         _, data = result
         return json.loads(data)
     return None
+
+
 async def push_media_task(task_id: str, job_id: str, input_path: str):
     await push_task(config.QUEUE_MEDIA, {
         "task_id": task_id,
         "job_id": job_id,
         "input_path": input_path,
     })
+
+
+async def push_transcribe_task(task_id: str, job_id: str, chunk_path: str,
+                                dialect: str = "auto", chunk_index: int = 0):
+    await push_task(config.QUEUE_TRANSCRIBE, {
+        "task_id": task_id,
+        "job_id": job_id,
+        "chunk_path": chunk_path,
+        "dialect": dialect,
+        "chunk_index": chunk_index,
+    })
+
 
 async def push_subtitle_task(task_id: str, job_id: str, results_dir: str,
                               original_video: str, subtitle_format: str = "srt",
@@ -50,17 +44,6 @@ async def push_subtitle_task(task_id: str, job_id: str, results_dir: str,
         "task_id": task_id,
         "job_id": job_id,
         "user_id": user_id,
-        "results_dir": results_dir,
-        "original_video": original_video,
-        "format": subtitle_format,
-        "burn": burn,
-    })
-async def push_subtitle_task(task_id: str, job_id: str, results_dir: str,
-                              original_video: str, subtitle_format: str = "srt",
-                              burn: bool = False):
-    await push_task(config.QUEUE_SUBTITLE, {
-        "task_id": task_id,
-        "job_id": job_id,
         "results_dir": results_dir,
         "original_video": original_video,
         "format": subtitle_format,
@@ -76,13 +59,14 @@ async def set_progress(job_id: str, data: dict):
     """Set progress hash for a job."""
     key = f"progress:{job_id}"
     await client.hset(key, mapping={k: str(v) for k, v in data.items()})
-    await client.expire(key, 86400)  # 24 hour TTL
+    await client.expire(key, 86400)
 
 
 async def update_progress(job_id: str, field: str, value):
     """Update a single progress field."""
     key = f"progress:{job_id}"
     await client.hset(key, field, str(value))
+
 
 async def increment_progress(job_id: str, field: str, amount: int = 1):
     """Increment a progress counter."""
@@ -109,6 +93,7 @@ async def delete_progress(job_id: str):
 async def get_queue_length(queue_name: str) -> int:
     return await client.llen(queue_name)
 
+
 async def remove_pending_tasks(job_id: str, queue_name: str) -> int:
     """Remove all pending tasks for a job from a queue (for cancellation)."""
     removed = 0
@@ -118,10 +103,8 @@ async def remove_pending_tasks(job_id: str, queue_name: str) -> int:
         if item:
             msg = json.loads(item)
             if msg.get("job_id") != job_id:
-                # Put it back if it's not for this job
                 await client.lpush(queue_name, item)
             else:
                 removed += 1
     return removed
-
 
