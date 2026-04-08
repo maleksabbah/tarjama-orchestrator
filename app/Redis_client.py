@@ -43,16 +43,18 @@ async def push_media_task(task_id: str, job_id: str, input_path: str):
         "input_path": input_path,
     })
 
-async def push_transcribe_task(task_id: str, job_id: str, chunk_path: str,
-                                dialect: str = "auto", chunk_index: int = 0):
-    await push_task(config.QUEUE_TRANSCRIBE, {
+async def push_subtitle_task(task_id: str, job_id: str, results_dir: str,
+                              original_video: str, subtitle_format: str = "srt",
+                              burn: bool = False, user_id: int = 0):
+    await push_task(config.QUEUE_SUBTITLE, {
         "task_id": task_id,
         "job_id": job_id,
-        "chunk_path": chunk_path,
-        "dialect": dialect,
-        "chunk_index": chunk_index,
+        "user_id": user_id,
+        "results_dir": results_dir,
+        "original_video": original_video,
+        "format": subtitle_format,
+        "burn": burn,
     })
-
 async def push_subtitle_task(task_id: str, job_id: str, results_dir: str,
                               original_video: str, subtitle_format: str = "srt",
                               burn: bool = False):
