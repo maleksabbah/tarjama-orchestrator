@@ -2,8 +2,18 @@ import json
 from app.Config import config
 import redis.asyncio as redis
 
-client = redis.from_url(config.REDIS_URL, decode_responses=True)
+client: redis.Redis = None
 
+
+async def init_redis():
+    global client
+    client = redis.from_url(config.REDIS_URL, decode_responses=True)
+
+
+async def close_redis():
+    global client
+    if client:
+        await client.close()
 
 async def push_task(queue: str, message: dict):
     await client.lpush(queue, json.dumps(message))
