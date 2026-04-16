@@ -1,12 +1,8 @@
 """
 Orchestrator State Machine
-==========================
-Pipeline logic: decides what happens after each step.
-
-Job lifecycle:
-  queued → extracting → transcribing → subtitling → completed
-               ↓              ↓             ↓
-             failed         failed        failed
+Routes completed task messages and advances the pipeline.
+Updated: media now produces one full audio file, not chunks.
+Transcription is one task per job (not per chunk).
 """
 from app.Config import config
 from app import Database as db
@@ -41,10 +37,12 @@ async def handle_completion(message: dict):
 async def handle_media_completed(message: dict):
     job_id = message["job_id"]
     task_id = message["task_id"]
-    chunks = message.get("chunks", [])
-    total_chunks = message.get("total_chunks", len(chunks))
+    audio_path = message.get("audio_path")
+    meta_path = message.get("meta_path")
+    duration = message.get("duration", 0)
+    fps = message.get("fps", 0)
 
-    print(f"  [STATE] Media done for job {job_id}: {total_chunks} chunks")
+    print(f"  [STATE] Media done for job {job_id}: {duration:.1f}s @ {fps:.3f}fps")
 
     await db.update_task_status(task_id, "completed")
 
@@ -53,30 +51,29 @@ async def handle_media_completed(message: dict):
         return
 
     await db.update_job_status(job_id, "transcribing")
-
     await rc.set_progress(job_id, {
         "status": "transcribing",
-        "total_chunks": total_chunks,
+        "total_chunks": 1,
         "completed_chunks": 0,
         "failed_chunks": 0,
     })
 
-    for i, chunk_path in enumerate(chunks):
-        task = await db.create_task(
-            job_id=job_id,
-            task_type="transcribe",
-            input_path=chunk_path,
-            chunk_index=i,
-        )
-        await rc.push_transcribe_task(
-            task_id=task["id"],
-            job_id=job_id,
-            chunk_path=chunk_path,
-            dialect=job.get("dialect", "auto"),
-            chunk_index=i,
-        )
+    # One transcription task for the full audio
+    task = await db.create_task(
+        job_id=job_id,
+        task_type="transcribe",
+        input_path=audio_path,
+    )
 
-    print(f"  [STATE] Pushed {total_chunks} transcription tasks for job {job_id}")
+    await rc.push_transcribe_task(
+        task_id=task["id"],
+        job_id=job_id,
+        audio_path=audio_path,
+        meta_path=meta_path,
+        dialect=job.get("dialect", "auto"),
+    )
+
+    print(f"  [STATE] Pushed transcription task for job {job_id}")
 
 
 async def handle_transcribe_completed(message: dict):
@@ -87,21 +84,8 @@ async def handle_transcribe_completed(message: dict):
     await db.update_task_status(task_id, "completed", output_path=output_path)
     await rc.increment_progress(job_id, "completed_chunks")
 
-    tasks = await db.get_tasks_by_job(job_id)
-    transcribe_tasks = [t for t in tasks if t["type"] == "transcribe"]
-    completed = sum(1 for t in transcribe_tasks if t["status"] == "completed")
-    failed = sum(1 for t in transcribe_tasks if t["status"] == "failed")
-    total = len(transcribe_tasks)
-
-    print(f"  [STATE] Transcription {completed}/{total} for job {job_id}")
-
-    if completed + failed >= total:
-        if failed > 0 and completed == 0:
-            await db.update_job_status(job_id, "failed",
-                                       error=f"All {failed} transcription tasks failed")
-            await rc.delete_progress(job_id)
-        else:
-            await start_subtitling(job_id)
+    print(f"  [STATE] Transcription done for job {job_id}")
+    await start_subtitling(job_id)
 
 
 async def start_subtitling(job_id: str):
@@ -112,18 +96,16 @@ async def start_subtitling(job_id: str):
     await db.update_job_status(job_id, "subtitling")
     await rc.update_progress(job_id, "status", "subtitling")
 
-    results_dir = f"results/{job_id}/"
-
     task = await db.create_task(
         job_id=job_id,
         task_type="subtitle",
-        input_path=results_dir,
+        input_path=f"results/{job_id}/",
     )
 
     await rc.push_subtitle_task(
         task_id=task["id"],
         job_id=job_id,
-        results_dir=results_dir,
+        results_dir=f"results/{job_id}/",
         original_video=job["input_file_path"],
         subtitle_format=job.get("subtitle_format", "srt"),
         burn=job.get("burn_subtitles", False),
@@ -166,7 +148,6 @@ async def handle_failure(message: dict):
 
     tasks = await db.get_tasks_by_job(job_id)
     task = next((t for t in tasks if t["id"] == task_id), None)
-
     if not task:
         return
 
@@ -180,9 +161,11 @@ async def handle_failure(message: dict):
             job = await db.get_job(job_id)
             await rc.push_media_task(task_id, job_id, job["input_file_path"])
         elif msg_type == "transcribe":
+            job = await db.get_job(job_id)
             await rc.push_transcribe_task(
-                task_id, job_id, task["input_path"],
-                chunk_index=task.get("chunk_index", 0),
+                task_id, job_id,
+                audio_path=task["input_path"],
+                dialect=job.get("dialect", "auto"),
             )
         elif msg_type == "subtitle":
             job = await db.get_job(job_id)
@@ -193,21 +176,5 @@ async def handle_failure(message: dict):
             )
     else:
         await db.update_task_status(task_id, "failed", error=error)
-
-        if msg_type == "transcribe":
-            await rc.increment_progress(job_id, "failed_chunks")
-            tasks = await db.get_tasks_by_job(job_id)
-            transcribe_tasks = [t for t in tasks if t["type"] == "transcribe"]
-            completed = sum(1 for t in transcribe_tasks if t["status"] == "completed")
-            failed = sum(1 for t in transcribe_tasks if t["status"] == "failed")
-            total = len(transcribe_tasks)
-
-            if completed + failed >= total:
-                if completed > 0:
-                    await start_subtitling(job_id)
-                else:
-                    await db.update_job_status(job_id, "failed", error="All chunks failed")
-                    await rc.delete_progress(job_id)
-        else:
-            await db.update_job_status(job_id, "failed", error=error)
-            await rc.delete_progress(job_id)
+        await db.update_job_status(job_id, "failed", error=error)
+        await rc.delete_progress(job_id)
