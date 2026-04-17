@@ -38,7 +38,7 @@ async def handle_media_completed(message: dict):
     job_id = message["job_id"]
     task_id = message["task_id"]
     audio_path = message.get("audio_path")
-    meta_path = message.get("meta_path")
+    video_meta_path = message.get("video_meta_path")
     duration = message.get("duration", 0)
     fps = message.get("fps", 0)
 
@@ -69,7 +69,7 @@ async def handle_media_completed(message: dict):
         task_id=task["id"],
         job_id=job_id,
         audio_path=audio_path,
-        meta_path=meta_path,
+        video_meta_path=video_meta_path,
         dialect=job.get("dialect", "auto"),
     )
 
