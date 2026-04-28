@@ -3,6 +3,9 @@ Orchestrator State Machine
 Routes completed task messages and advances the pipeline.
 Updated: media now produces one full audio file, not chunks.
 Transcription is one task per job (not per chunk).
+Subtitle stage now sends two completion messages:
+  - stage="subtitles" after SRT/VTT/transcript uploaded
+  - stage="burn" after burned video uploaded (only if burn was requested)
 """
 from app.Config import config
 from app import Database as db
@@ -116,13 +119,23 @@ async def start_subtitling(job_id: str):
 
 
 async def handle_subtitle_completed(message: dict):
+    """
+    Handles two-stage subtitle completion.
+
+    Stage "subtitles": SRT/VTT/transcript uploaded.
+      - If burn was requested (final=False): move job to "burning", save paths.
+      - If burn was NOT requested (final=True): mark job completed, save paths.
+
+    Stage "burn": burned video uploaded.
+      - Always final: save video path, mark job completed.
+    """
     job_id = message["job_id"]
     task_id = message["task_id"]
+    stage = message.get("stage", "subtitles")
+    is_final = message.get("final", True)
     outputs = message.get("outputs", {})
 
-    print(f"  [STATE] Subtitles done for job {job_id}")
-
-    await db.update_task_status(task_id, "completed")
+    print(f"  [STATE] Subtitle stage='{stage}' done for job {job_id} (final={is_final})")
 
     update_fields = {}
     if "transcript" in outputs:
@@ -132,10 +145,31 @@ async def handle_subtitle_completed(message: dict):
     if "video" in outputs:
         update_fields["video_output_path"] = outputs["video"]
 
-    await db.update_job_status(job_id, "completed", **update_fields)
-    await rc.delete_progress(job_id)
+    if stage == "subtitles":
+        if is_final:
+            # No burn requested — this is the final completion
+            await db.update_task_status(task_id, "completed")
+            await db.update_job_status(job_id, "completed", **update_fields)
+            await rc.delete_progress(job_id)
+            print(f"  [STATE] Job {job_id} COMPLETED (no burn)")
+        else:
+            # Burn requested — save paths, move job to "burning", keep task open
+            if update_fields:
+                await db.update_job_status(job_id, "burning", **update_fields)
+            else:
+                await db.update_job_status(job_id, "burning")
+            await rc.update_progress(job_id, "status", "burning")
+            print(f"  [STATE] Job {job_id} moved to BURNING stage")
 
-    print(f"  [STATE] Job {job_id} COMPLETED")
+    elif stage == "burn":
+        # Burn finished — mark task and job complete
+        await db.update_task_status(task_id, "completed")
+        await db.update_job_status(job_id, "completed", **update_fields)
+        await rc.delete_progress(job_id)
+        print(f"  [STATE] Job {job_id} COMPLETED (burn done)")
+
+    else:
+        print(f"  [STATE] Unknown subtitle stage '{stage}' for job {job_id}")
 
 
 async def handle_failure(message: dict):
