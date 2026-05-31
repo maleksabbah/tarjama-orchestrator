@@ -14,7 +14,7 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.Configs.Redis import get_redis
+from app.Config.Redis import get_redis
 from app.Repositories import LiveSessionRepository
 from app.Services import LiveTranscriptionService
 
