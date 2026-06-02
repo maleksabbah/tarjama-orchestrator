@@ -19,6 +19,8 @@ from app.Repositories import (
     EventPublisher,
 )
 from app.Services.JobService import JobService
+from app.Services.GpuWaker import wake_gpu
+import asyncio
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -54,6 +56,9 @@ async def create_job(body: CreateJobRequest) -> JobResponse:
             subtitle_format=body.subtitle_format or "srt",
             burn_subtitles=bool(body.burn_subtitles),
         )
+        # Best-effort: wake the GPU transcription box. Task already queued in
+        # Kafka; the worker drains it once it boots. Never blocks job creation.
+        asyncio.create_task(wake_gpu())
         return JobResponse.model_validate(job)
 
 
@@ -117,9 +122,3 @@ async def cancel_job(job_id: str, user_id: int = Query(...)) -> dict:
             events=EventPublisher(producer),
         )
         return await service.cancel_job(job_id, user_id)
-
-
-
-
-
-
