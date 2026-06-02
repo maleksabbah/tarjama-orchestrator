@@ -19,7 +19,7 @@ from app.Repositories import (
     EventPublisher,
 )
 from app.Services.JobService import JobService
-from app.Services.GpuWaker import wake_gpu
+from app.Services.GPUWaker import wake_gpu
 import asyncio
 
 
