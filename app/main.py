@@ -24,10 +24,8 @@ from app.Repositories import (
 from app.Services.PipelineService import PipelineService
 from app.ExceptionHandler import register_exception_handlers
 from app.Routes.JobRoutes import router as jobs_router
-
-
+from app.Routes.WsRoutes import router as ws_router
 # ─── Consumer loop ──────────────────────────────────────────────────────
-
 async def run_completion_consumer() -> None:
     """
     Reads completion events off Kafka and drives PipelineService.
@@ -111,7 +109,7 @@ app = FastAPI(
 
 register_exception_handlers(app)
 app.include_router(jobs_router)
-
+app.include_router(ws_router)
 
 @app.get("/health")
 async def health() -> dict:
