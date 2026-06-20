@@ -4,10 +4,12 @@ Live transcription service.
 Handles both /ws/live (mic streaming) and /ws/transcribe (file upload-then-stream)
 flows. Owns the policy: TTLs, session-id format, queue names.
 """
+import asyncio
 import json
 from typing import Optional
 
 from app.Repositories import LiveSessionRepository
+from app.Services.GPUWaker import wake_gpu
 
 
 # Live mic chunks expire after 2 minutes of inactivity.
@@ -38,6 +40,7 @@ class LiveTranscriptionService:
 
     async def push_live_audio(self, session_id: str, chunk: bytes) -> None:
         """Buffer a mic audio chunk for the worker and signal it."""
+        asyncio.create_task(wake_gpu())
         await self.sessions.append_live_audio(
             session_id, chunk, LIVE_AUDIO_TTL_SECONDS,
         )
@@ -70,6 +73,7 @@ class LiveTranscriptionService:
 
     async def submit_file(self, session_id: str, user_id: str) -> None:
         """Mark the upload complete and queue it for the worker."""
+        asyncio.create_task(wake_gpu())
         payload = json.dumps({
             "session_id": session_id,
             "audio_key": f"transcribe:audio:{session_id}",
